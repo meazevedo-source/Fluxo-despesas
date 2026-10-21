@@ -567,6 +567,17 @@ async function chamar(corpo){
   });
   return await r.json();
 }
+/** Uma resposta só é aceita se vier da versão atual do script E trouxer a
+    lista de lançamentos. Sem isso o app poderia apagar o que tem no
+    aparelho por causa de uma implantação desatualizada. */
+const PROTOCOLO=3;
+function respostaValida(j){
+  return !!(j && j.ok && j.v>=PROTOCOLO && Array.isArray(j.lancamentos));
+}
+const ERRO_VERSAO="O endereço respondeu, mas não é a versão atual do script. "+
+  "Cole o planilha-fluxo.gs novo no Apps Script e publique uma NOVA implantação "+
+  "(Implantar → Nova implantação), não uma edição da atual. Nada foi alterado aqui.";
+
 function motivo(j){
   const e=j&&j.erro;
   if(e==="token")   return "o token de leitura não confere com o do script.";
@@ -583,7 +594,8 @@ async function carregarDaBase(silencioso){
   try{
     const j=await chamar({acao:"ler"});
     if(!j||!j.ok){ aviso("A planilha recusou: "+motivo(j)); S.ocupado=false; return false; }
-    S.base={lancamentos:j.lancamentos||[],orcamento:j.orcamento||{},lidoEm:agora()};
+    if(!respostaValida(j)){ aviso(ERRO_VERSAO); S.ocupado=false; renderTudo(); return false; }
+    S.base={lancamentos:j.lancamentos,orcamento:j.orcamento||{},lidoEm:agora()};
     // o que ainda não subiu continua valendo por cima do que veio da planilha,
     // senão um lançamento feito offline sumiria da tela ao abrir o app
     S.fila.forEach(aplicarLocal);
@@ -639,8 +651,13 @@ async function escoarFila(silencioso){
       if(j&&j.erro==="pin"){ S.cfg.pin=""; gravar(K_CFG,S.cfg); }
       S.ocupado=false; renderTudo(); return false;
     }
+    if(!respostaValida(j)){
+      // a fila NÃO é descartada: sem resposta confiável, nada daqui se perde
+      aviso(ERRO_VERSAO);
+      S.ocupado=false; renderTudo(); return false;
+    }
     S.fila=S.fila.slice(envio.length); gravar(K_FILA,S.fila);
-    S.base={lancamentos:j.lancamentos||[],orcamento:j.orcamento||{},lidoEm:agora()};
+    S.base={lancamentos:j.lancamentos,orcamento:j.orcamento||{},lidoEm:agora()};
     gravar(K_BASE,S.base);
     S.ocupado=false; aviso(""); renderTudo();
     return true;
@@ -1110,9 +1127,13 @@ el("btn-testar").addEventListener("click",async()=>{
   try{
     const r=await fetch(url,{method:"GET",redirect:"follow"});
     const txt=await r.text();
-    if(/"servico"\s*:\s*"Fluxo Pessoal"/.test(txt)){
+    if(/"servico"\s*:\s*"Fluxo Pessoal"/.test(txt) && /"v"\s*:\s*3/.test(txt)){
       alcancou=true;
-      saida+=dgLinha("ok","Script encontrado","A implantação responde e é a versão nova do script.");
+      saida+=dgLinha("ok","Script encontrado","A implantação responde e é a versão atual do script.");
+    }else if(/"servico"\s*:\s*"Fluxo Pessoal"/.test(txt)){
+      saida+=dgLinha("erro","Implantação desatualizada",
+        "Responde, mas é uma versão anterior do script. Cole o planilha-fluxo.gs novo e publique uma NOVA implantação — editar a atual mantém a versão velha no ar.");
+      cx.innerHTML=saida; return;
     }else if(/^\s*</.test(txt)){
       saida+=dgLinha("erro","O endereço devolveu uma página, não dados",
         "Normalmente é uma tela de login do Google: a implantação não está como \"Qualquer pessoa\" ou está como \"Executar como: usuário que acessa\".");
@@ -1196,8 +1217,12 @@ el("btn-destravar").addEventListener("click",async()=>{
       S.cfg.pin=""; gravar(K_CFG,S.cfg);
       aviso("A planilha recusou: "+motivo(j)); toast("PIN não aceito"); renderTudo(); return;
     }
+    if(!respostaValida(j)){
+      S.cfg.pin=""; gravar(K_CFG,S.cfg);
+      aviso(ERRO_VERSAO); toast("Implantação desatualizada"); renderTudo(); return;
+    }
     gravar(K_CFG,S.cfg);
-    S.base={lancamentos:j.lancamentos||[],orcamento:j.orcamento||{},lidoEm:agora()};
+    S.base={lancamentos:j.lancamentos,orcamento:j.orcamento||{},lidoEm:agora()};
     gravar(K_BASE,S.base);
     el("f-pin").value=""; aviso(""); toast("Edição destravada neste aparelho");
     renderTudo(); escoarFila(true);
